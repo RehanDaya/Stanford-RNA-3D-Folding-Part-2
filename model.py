@@ -36,7 +36,12 @@ class BiLSTMCoordinateModel(nn.Module):
             dropout=cfg.dropout if cfg.num_layers > 1 else 0.0,
         )
         self.dropout = nn.Dropout(cfg.dropout)
-        self.out = nn.Linear(2 * cfg.hidden_dim, cfg.num_structures * 3)
+        self.scale_head = nn.Sequential(
+            nn.Linear(2 * cfg.hidden_dim, cfg.hidden_dim),
+            nn.ReLU(),
+            nn.Linear(cfg.hidden_dim, 1),
+            nn.Softplus(),
+        )
 
     def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         """
@@ -57,6 +62,15 @@ class BiLSTMCoordinateModel(nn.Module):
         logits = self.out(out)  # [B, L, num_structures*3]
         B, L, _ = logits.shape
         coords = logits.view(B, L, self.cfg.num_structures, 3)
+        # Predict a positive per-target scale and apply it to all coordinates.
+        # This helps the model learn a consistent coordinate scale without relying on
+        # absolute coordinate magnitudes early in training.
+        mask = torch.arange(L, device=lengths.device)[None, :] < lengths[:, None]  # [B,L]
+        mask_f = mask.to(out.dtype).unsqueeze(-1)  # [B,L,1]
+        denom = torch.clamp(mask_f.sum(dim=1), min=1.0)  # [B,1]
+        pooled = (out * mask_f).sum(dim=1) / denom  # [B,2H]
+        scale = self.scale_head(pooled).view(B, 1, 1, 1)  # [B,1,1,1]
+        coords = coords * scale
         return coords
 
 
