@@ -13,7 +13,7 @@ from model import BiLSTMCoordinateModel, ModelConfig
 
 
 def load_model(checkpoint_path: Path, device: str | torch.device) -> BiLSTMCoordinateModel:
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
     cfg = ModelConfig(**ckpt["config"])
     model = BiLSTMCoordinateModel(cfg)
     model.load_state_dict(ckpt["model_state_dict"])
@@ -60,7 +60,11 @@ def build_submission(
     # We will accumulate predictions per target_id once, then fill rows.
     cache: dict[str, np.ndarray] = {}
 
-    all_coords_cols = [c for c in sample_sub.columns if c.startswith("x_") or c.startswith("y_") or c.startswith("z_")]
+    # Ensure coordinate columns are float so we can write model outputs.
+    coord_cols: list[str] = []
+    for i in range(1, 6):
+        coord_cols.extend([f"x_{i}", f"y_{i}", f"z_{i}"])
+    sample_sub[coord_cols] = sample_sub[coord_cols].astype("float32")
 
     for idx, row in sample_sub.iterrows():
         target_id, resid = row["ID"].split("_", 1)
@@ -84,8 +88,8 @@ def build_submission(
             for v in (x, y, z):
                 flat.append(float(np.clip(v, -999.999, 9999.999)))
 
-        # Fill the subset of columns we have values for.
-        for col, val in zip(all_coords_cols, flat):
+        # Fill x_1,y_1,z_1,...,x_5,y_5,z_5 in the correct order.
+        for col, val in zip(coord_cols, flat):
             sample_sub.at[idx, col] = val
 
     sample_sub.to_csv(output_path, index=False)
