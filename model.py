@@ -97,6 +97,11 @@ def coordinate_loss(
     B, L, N, _ = pred_coords.shape
     _, _, K, _ = true_coords.shape
 
+    # Hyperparameters for loss terms.
+    # - dist_window controls the sequence-distance range for distance-matrix supervision.
+    dist_window = 16
+    w_dist = 0.1
+
     def kabsch_align(P: torch.Tensor, Q: torch.Tensor) -> torch.Tensor:
         """
         Align P to Q with Kabsch rotation. Both are [M,3] and assumed centered.
@@ -108,6 +113,42 @@ def coordinate_loss(
         D = torch.diag(torch.tensor([1.0, 1.0, d], device=P.device, dtype=P.dtype))
         R = V @ D @ Wt
         return P @ R
+
+    def center_and_scale(X: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Center and scale coordinates.
+        Returns:
+          Xn: normalized coords
+          mu: centroid
+          s: scale (RMS radius)
+        """
+        mu = X.mean(dim=0, keepdim=True)
+        Xc = X - mu
+        s = torch.sqrt(torch.mean(torch.sum(Xc * Xc, dim=-1))).clamp(min=1e-6)
+        Xn = Xc / s
+        return Xn, mu, s
+
+    def local_distance_loss(P_full: torch.Tensor, Q_full: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+        """
+        Compare local (sequence-neighbor) distance patterns for offsets 1..dist_window.
+        P_full and Q_full are [L,3] in the same (normalized) coordinate frame.
+        valid is [L] indicating which residues are present.
+        """
+        losses = []
+        Lloc = P_full.shape[0]
+        w = min(dist_window, Lloc - 1)
+        if w <= 0:
+            return torch.tensor(0.0, device=P_full.device)
+        for off in range(1, w + 1):
+            m = valid[:-off] & valid[off:]
+            if not torch.any(m):
+                continue
+            dP = torch.linalg.norm(P_full[off:][m] - P_full[:-off][m], dim=-1)
+            dQ = torch.linalg.norm(Q_full[off:][m] - Q_full[:-off][m], dim=-1)
+            losses.append(torch.mean((dP - dQ) ** 2))
+        if not losses:
+            return torch.tensor(0.0, device=P_full.device)
+        return torch.stack(losses).mean()
 
     losses = []
     for b in range(B):
@@ -126,23 +167,35 @@ def coordinate_loss(
             if valid.sum() < 3:
                 continue
             Qv = Q[valid]
-            Qc = Qv - Qv.mean(dim=0, keepdim=True)
+            Qn, _, _ = center_and_scale(Qv)
 
             # For this conformation, best over predicted structures.
             best_k = None
             for n in range(N):
                 P = pred_b[:, n, :]  # [L,3]
                 Pv = P[valid]
-                Pc = Pv - Pv.mean(dim=0, keepdim=True)
+                Pn, _, _ = center_and_scale(Pv)
 
                 # Clamp to avoid numerical overflow.
-                Pc = torch.clamp(Pc, -1e4, 1e4)
-                Qc2 = torch.clamp(Qc, -1e4, 1e4)
+                Pn = torch.clamp(Pn, -1e4, 1e4)
+                Qn = torch.clamp(Qn, -1e4, 1e4)
 
-                Palign = kabsch_align(Pc, Qc2)
-                mse = torch.mean((Palign - Qc2) ** 2)
-                if best_k is None or mse < best_k:
-                    best_k = mse
+                Palign = kabsch_align(Pn, Qn)
+                mse = torch.mean((Palign - Qn) ** 2)
+
+                # Distance-matrix supervision on a local window, using normalized coordinates.
+                # Use aligned predicted coords in the full-length indexing for consistency.
+                # Reconstruct a full-length normalized-aligned P by placing the aligned valid
+                # residues back into their positions; invalid positions remain unused by mask.
+                P_full = torch.zeros((maxL, 3), device=device, dtype=pred_coords.dtype)
+                Q_full = torch.zeros((maxL, 3), device=device, dtype=pred_coords.dtype)
+                P_full[valid] = Palign
+                Q_full[valid] = Qn
+                dist_loss = local_distance_loss(P_full, Q_full, valid)
+
+                total = mse + w_dist * dist_loss
+                if best_k is None or total < best_k:
+                    best_k = total
             if best_k is None:
                 continue
             if best_b is None or best_k < best_b:
