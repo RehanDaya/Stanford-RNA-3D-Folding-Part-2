@@ -69,25 +69,74 @@ def coordinate_loss(
     Compute loss between predicted and true coordinates.
 
     Args:
-        pred_coords: [B, L, num_structures, 3]
-        true_coords: [B, L, 3] (experimental structure for one conformation)
+        pred_coords: [B, L, N, 3] predicted coordinates for N structures
+        true_coords: [B, L, K, 3] experimental coordinates for K conformations (NaN where missing)
         lengths: [B] true lengths.
 
-    We use the best-of-N structure loss: for each residue, pick the closest of
-    the num_structures predictions.
+    Loss:
+      - For each (batch item), for each true conformation k, we align each predicted
+        structure n to that conformation using Kabsch (rigid rotation + translation),
+        compute mean squared error on valid residues, then take min over n and k.
     """
-    # Expand true coords to [B, L, 1, 3] for broadcasting.
-    true_exp = true_coords.unsqueeze(2)  # [B, L, 1, 3]
-    diff = pred_coords - true_exp  # [B, L, N, 3]
+    device = pred_coords.device
+    B, L, N, _ = pred_coords.shape
+    _, _, K, _ = true_coords.shape
 
-    # Clamp differences to avoid overflow when squaring.
-    diff = torch.clamp(diff, -1e4, 1e4)
+    def kabsch_align(P: torch.Tensor, Q: torch.Tensor) -> torch.Tensor:
+        """
+        Align P to Q with Kabsch rotation. Both are [M,3] and assumed centered.
+        Returns aligned P [M,3].
+        """
+        C = P.T @ Q
+        V, S, Wt = torch.linalg.svd(C, full_matrices=False)
+        d = torch.sign(torch.det(V @ Wt))
+        D = torch.diag(torch.tensor([1.0, 1.0, d], device=P.device, dtype=P.dtype))
+        R = V @ D @ Wt
+        return P @ R
 
-    sq = (diff**2).sum(dim=-1)  # [B, L, N]
-    best_sq, _ = sq.min(dim=-1)  # [B, L]
+    losses = []
+    for b in range(B):
+        maxL = int(lengths[b].item())
+        if maxL <= 0:
+            losses.append(torch.tensor(0.0, device=device))
+            continue
 
-    mask = torch.arange(pred_coords.size(1), device=lengths.device)[None, :] < lengths[:, None]
-    best_sq = best_sq * mask
-    denom = mask.sum()
-    return best_sq.sum() / torch.clamp(denom, min=1.0)
+        pred_b = pred_coords[b, :maxL]  # [L, N, 3]
+        true_b = true_coords[b, :maxL]  # [L, K, 3]
+
+        best_b = None
+        for k in range(K):
+            Q = true_b[:, k, :]  # [L,3]
+            valid = torch.isfinite(Q).all(dim=-1)  # [L]
+            if valid.sum() < 3:
+                continue
+            Qv = Q[valid]
+            Qc = Qv - Qv.mean(dim=0, keepdim=True)
+
+            # For this conformation, best over predicted structures.
+            best_k = None
+            for n in range(N):
+                P = pred_b[:, n, :]  # [L,3]
+                Pv = P[valid]
+                Pc = Pv - Pv.mean(dim=0, keepdim=True)
+
+                # Clamp to avoid numerical overflow.
+                Pc = torch.clamp(Pc, -1e4, 1e4)
+                Qc2 = torch.clamp(Qc, -1e4, 1e4)
+
+                Palign = kabsch_align(Pc, Qc2)
+                mse = torch.mean((Palign - Qc2) ** 2)
+                if best_k is None or mse < best_k:
+                    best_k = mse
+            if best_k is None:
+                continue
+            if best_b is None or best_k < best_b:
+                best_b = best_k
+
+        if best_b is None:
+            # No valid conformation; return 0 for this sample.
+            best_b = torch.tensor(0.0, device=device)
+        losses.append(best_b)
+
+    return torch.stack(losses).mean()
 

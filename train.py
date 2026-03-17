@@ -30,6 +30,23 @@ class RNATargetDataset(Dataset):
         labels_df = add_target_and_resid(labels_df)
         self.seq_map = get_sequence_map(split)
 
+        # Identify how many coordinate conformations exist in this split (train has 1; validation has up to 40).
+        coord_indices: list[int] = []
+        for col in labels_df.columns:
+            if col.startswith("x_"):
+                try:
+                    coord_indices.append(int(col.split("_", 1)[1]))
+                except ValueError:
+                    pass
+        coord_indices = sorted(set(coord_indices))
+        if not coord_indices:
+            raise ValueError("No coordinate columns (x_*) found in labels.")
+
+        self.num_confs = len(coord_indices)
+        x_cols = [f"x_{i}" for i in coord_indices]
+        y_cols = [f"y_{i}" for i in coord_indices]
+        z_cols = [f"z_{i}" for i in coord_indices]
+
         # Group labels by target_id and sort by resid (fast path via groupby).
         print(f"Grouping {split} labels by target_id ...")
         groups: Dict[str, np.ndarray] = {}
@@ -37,7 +54,16 @@ class RNATargetDataset(Dataset):
             labels_df.groupby("target_id"), desc=f"Building {split} target groups"
         ):
             g = g.sort_values("resid")
-            coords = g[["x_1", "y_1", "z_1"]].to_numpy(dtype=np.float32)
+            coords = np.stack(
+                [
+                    g[x_cols].to_numpy(dtype=np.float32),
+                    g[y_cols].to_numpy(dtype=np.float32),
+                    g[z_cols].to_numpy(dtype=np.float32),
+                ],
+                axis=-1,
+            )  # [L, K, 3]
+            # Treat sentinel missing values (e.g. -1e18) as NaN so loss can ignore them.
+            coords[coords < -1e17] = np.nan
             groups[tid] = coords
 
         self.targets: List[str] = sorted(groups.keys())
@@ -60,7 +86,7 @@ class RNATargetDataset(Dataset):
         if coords.shape[0] > L:
             coords = coords[:L]
         elif coords.shape[0] < L:
-            pad = np.zeros((L - coords.shape[0], 3), dtype=np.float32)
+            pad = np.full((L - coords.shape[0], coords.shape[1], 3), np.nan, dtype=np.float32)
             coords = np.concatenate([coords, pad], axis=0)
         return tid, feats, coords
 
@@ -83,7 +109,8 @@ def collate_batch(
 
     B = len(batch)
     feats = torch.zeros((B, max_len, D), dtype=torch.float32)
-    coords = torch.zeros((B, max_len, 3), dtype=torch.float32)
+    K = coords_list[0].shape[1]
+    coords = torch.full((B, max_len, K, 3), float("nan"), dtype=torch.float32)
     for i, (f, c) in enumerate(zip(feats_list, coords_list)):
         L = f.shape[0]
         feats[i, :L] = f
@@ -91,7 +118,6 @@ def collate_batch(
 
     # Sanitize any NaN/Inf values to keep losses finite.
     feats = torch.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
-    coords = torch.nan_to_num(coords, nan=0.0, posinf=0.0, neginf=0.0)
 
     return target_ids, feats, coords, lengths
 
