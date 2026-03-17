@@ -202,21 +202,23 @@ def build_per_residue_features(
 
     feature_blocks = [one_hot, pos, msa_freqs, msa_entropy]
 
-    # Metadata scalars: choose a few useful columns if provided.
-    if metadata_row is not None:
-        meta_cols = []
-        for col in [
-            "composition_rna_fraction",
-            "total_structuredness_adjusted",
-            "length",
-            "resolution",
-        ]:
-            if col in metadata_row and pd.notna(metadata_row[col]):
-                meta_cols.append(float(metadata_row[col]))
-        if meta_cols:
-            meta_vec = np.array(meta_cols, dtype=np.float32)[None, :]
-            meta_block = np.repeat(meta_vec, len(sequence), axis=0)
-            feature_blocks.append(meta_block)
+    # Metadata scalars: always append a fixed-width vector so feature dim is consistent.
+    meta_keys = [
+        "composition_rna_fraction",
+        "total_structuredness_adjusted",
+        "fraction_observed",
+        "length",
+        "resolution",
+    ]
+    meta_vals: list[float] = []
+    for k in meta_keys:
+        if metadata_row is not None and k in metadata_row and pd.notna(metadata_row[k]):
+            meta_vals.append(float(metadata_row[k]))
+        else:
+            meta_vals.append(0.0)
+    meta_vec = np.array(meta_vals, dtype=np.float32)[None, :]
+    meta_block = np.repeat(meta_vec, len(sequence), axis=0)
+    feature_blocks.append(meta_block)
 
     return np.concatenate(feature_blocks, axis=1).astype(np.float32)
 

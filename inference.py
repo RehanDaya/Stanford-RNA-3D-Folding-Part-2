@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from data_io import DATA_DIR, add_target_and_resid, get_sequence_map, load_sample_submission
+from data_io import DATA_DIR, add_target_and_resid, build_normalized_metadata_map, get_sequence_map, load_sample_submission
 from features import build_per_residue_features
 from model import BiLSTMCoordinateModel, ModelConfig
 
@@ -27,6 +27,7 @@ def predict_for_target(
     device: str | torch.device,
     target_id: str,
     sequence: str,
+    meta_map: dict[str, "pd.Series"] | None = None,
 ) -> np.ndarray:
     """
     Run the model on a single target and return coordinates.
@@ -34,7 +35,10 @@ def predict_for_target(
     Returns:
         coords: [L, num_structures, 3] numpy array.
     """
-    feats = build_per_residue_features(target_id, sequence, metadata_row=None)
+    metadata_row = None
+    if meta_map is not None:
+        metadata_row = meta_map.get(target_id)
+    feats = build_per_residue_features(target_id, sequence, metadata_row=metadata_row)
     feats_t = torch.from_numpy(feats)[None, ...].to(device)  # [1,L,D]
     lengths = torch.tensor([feats.shape[0]], dtype=torch.long, device=device)
     with torch.no_grad():
@@ -56,6 +60,7 @@ def build_submission(
 
     # Sequence lookup for test split.
     seq_map = get_sequence_map("test")
+    meta_map = build_normalized_metadata_map("test", normalize_using_split="train")
 
     # We will accumulate predictions per target_id once, then fill rows.
     cache: dict[str, np.ndarray] = {}
@@ -70,7 +75,7 @@ def build_submission(
         target_id, resid = row["ID"].split("_", 1)
         if target_id not in cache:
             sequence = seq_map[target_id]
-            coords = predict_for_target(model, device, target_id, sequence)
+            coords = predict_for_target(model, device, target_id, sequence, meta_map=meta_map)
             cache[target_id] = coords
 
         coords = cache[target_id]

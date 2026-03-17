@@ -10,7 +10,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from data_io import DATA_DIR, add_target_and_resid, get_sequence_map, load_labels
+from data_io import DATA_DIR, add_target_and_resid, build_normalized_metadata_map, get_sequence_map, load_labels
 from features import build_per_residue_features
 from model import BiLSTMCoordinateModel, ModelConfig, coordinate_loss
 
@@ -29,6 +29,7 @@ class RNATargetDataset(Dataset):
         labels_df = load_labels(split)
         labels_df = add_target_and_resid(labels_df)
         self.seq_map = get_sequence_map(split)
+        self.meta_map = build_normalized_metadata_map(split, normalize_using_split="train")
 
         # Identify how many coordinate conformations exist in this split (train has 1; validation has up to 40).
         coord_indices: list[int] = []
@@ -79,8 +80,8 @@ class RNATargetDataset(Dataset):
         tid = self.targets[idx]
         seq = self.seq_map[tid]
         coords = self.groups[tid]
-        # Build features; no per-target metadata in this baseline.
-        feats = build_per_residue_features(tid, seq, metadata_row=None)
+        meta_row = self.meta_map.get(tid)
+        feats = build_per_residue_features(tid, seq, metadata_row=meta_row)
         # Truncate/pad coords to match sequence length if needed.
         L = len(seq)
         if coords.shape[0] > L:
