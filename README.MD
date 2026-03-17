@@ -28,7 +28,20 @@ The train/validation split uses **cluster-based temporal partitioning** (MMseqs2
   Trains the BiLSTM-based coordinate model on the training/validation splits and saves checkpoints under `checkpoints/`.
 
 - **Generate submission**: `python inference.py`  
-  Loads a trained checkpoint and writes a `submission.csv` in the `data/` directory matching the Kaggle competition format.
+  Loads a trained checkpoint and writes a `submission.csv` in the project root matching the Kaggle competition format.
 
-Manually install this for GPU use: pip install torch --index-url https://download.pytorch.org/whl/cu121
+- **Submit to Kaggle from local (code competition)**  
+  After running inference and ensuring `submission.csv` is in the project root, submit via Kaggle CLI:
 
+  ```bash
+  kaggle competitions submit -c stanford-rna-3d-folding-2 \
+    -f submission.csv \
+    -k username/notebook-name \
+    -v version_# \
+    -m "local inference submit"
+  ```
+  Must have existing cloud notebook to have as reference, it can be an empty notebook.
+
+Manually install this for GPU use: `pip install torch --index-url https://download.pytorch.org/whl/cu121`
+
+﻿
