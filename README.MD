@@ -18,3 +18,17 @@ The dataset provides:
 - **`extra/`**: Helper scripts (e.g., `parse_fasta_py.py`) and `rna_metadata.csv` describing all RNA and RNA/DNA hybrid structures (see `extra/README.md`).
 
 The train/validation split uses **cluster-based temporal partitioning** (MMseqs2 at 30% identity) to minimize homology between train and evaluation data. Additional filters ensure sufficient RNA content, structural completeness, and removal of redundant or low-quality entries.
+
+### CLI usage
+
+- **Install dependencies**: `pip install -r requirements.txt`  
+  Installs all Python packages needed for data loading, feature engineering, modeling, and inference.
+
+- **Train model**: `python train.py`  
+  Trains the BiLSTM-based coordinate model on the training/validation splits and saves checkpoints under `checkpoints/`.
+
+- **Generate submission**: `python inference.py`  
+  Loads a trained checkpoint and writes a `submission.csv` in the `data/` directory matching the Kaggle competition format.
+
+Manually install this for GPU use: pip install torch --index-url https://download.pytorch.org/whl/cu121
+
