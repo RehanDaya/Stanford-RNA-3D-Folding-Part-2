@@ -2,3 +2,4 @@ venv/
 data/
 checkpoints/
 __pycache__/
+submission.csv

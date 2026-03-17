@@ -103,6 +103,7 @@ def build_submission(
 
 if __name__ == "__main__":
     ckpt = Path("checkpoints") / "model_epoch5.pt"
-    out = DATA_DIR / "submission.csv"
+    # Kaggle expects the notebook to write `submission.csv` in the working directory.
+    out = Path("submission.csv")
     build_submission(ckpt, out)
 
