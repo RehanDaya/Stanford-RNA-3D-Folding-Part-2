@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -50,6 +50,98 @@ def load_msa(target_id: str) -> List[str]:
         return []
     records = list(SeqIO.parse(str(msa_path), "fasta"))
     return [str(rec.seq).upper() for rec in records]
+
+
+def load_msa_records(target_id: str) -> list[tuple[str, str]]:
+    """
+    Load MSA records as (record_id, aligned_sequence) pairs.
+    If MSA is missing, returns an empty list.
+    """
+    msa_path = DATA_DIR / "MSA" / f"{target_id}.MSA.fasta"
+    if not msa_path.exists():
+        return []
+    records = list(SeqIO.parse(str(msa_path), "fasta"))
+    return [(rec.id, str(rec.seq).upper()) for rec in records]
+
+
+def msa_query_mapped_stats(
+    msa_records: list[tuple[str, str]],
+    query_sequence: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute per-residue MSA profile features by mapping alignment columns to query residues.
+
+    Strategy:
+      - Find the aligned query row (record id == 'query' preferred; else use first row).
+      - For each alignment column j where query_aln[j] != '-', map it to residue index i
+        in the ungapped query.
+      - Compute A/C/G/U frequencies and Shannon entropy among homolog sequences at column j,
+        ignoring gaps.
+
+    Returns:
+      freqs: [L_query, 4]
+      entropy: [L_query, 1]
+
+    If mapping fails, returns zero arrays.
+    """
+    Lq = len(query_sequence)
+    if not msa_records:
+        return np.zeros((Lq, 4), dtype=np.float32), np.zeros((Lq, 1), dtype=np.float32)
+
+    # Pick query aligned row.
+    query_aln = None
+    for rid, seq in msa_records:
+        if rid.lower() == "query":
+            query_aln = seq
+            break
+    if query_aln is None:
+        query_aln = msa_records[0][1]
+
+    aln_len = len(query_aln)
+    if aln_len == 0:
+        return np.zeros((Lq, 4), dtype=np.float32), np.zeros((Lq, 1), dtype=np.float32)
+
+    # Sanity: ensure all rows have same alignment length; if not, fallback to zeros.
+    for _, s in msa_records:
+        if len(s) != aln_len:
+            return np.zeros((Lq, 4), dtype=np.float32), np.zeros((Lq, 1), dtype=np.float32)
+
+    # Map alignment columns to residue indices in ungapped query.
+    ungapped = query_aln.replace("-", "")
+    if ungapped != query_sequence:
+        # If mismatch, avoid introducing shifted/noisy features.
+        return np.zeros((Lq, 4), dtype=np.float32), np.zeros((Lq, 1), dtype=np.float32)
+
+    freqs = np.zeros((Lq, 4), dtype=np.float32)
+    entropy = np.zeros((Lq, 1), dtype=np.float32)
+
+    res_i = 0
+    for j in range(aln_len):
+        if query_aln[j] == "-":
+            continue
+
+        counts = np.zeros(4, dtype=np.float32)
+        total = 0.0
+        for _, s in msa_records:
+            ch = s[j]
+            if ch == "-":
+                continue
+            idx = NUC_TO_IDX.get(ch)
+            if idx is not None:
+                counts[idx] += 1.0
+                total += 1.0
+
+        if total > 0:
+            p = counts / total
+            freqs[res_i] = p
+            mask = p > 0
+            entropy[res_i, 0] = -np.sum(p[mask] * np.log2(p[mask]))
+
+        res_i += 1
+        if res_i >= Lq:
+            break
+
+    return freqs, entropy
 
 
 def msa_position_stats(msa_seqs: List[str]) -> Tuple[np.ndarray, np.ndarray]:
@@ -104,23 +196,9 @@ def build_per_residue_features(
     one_hot = one_hot_sequence(sequence)
     pos = positional_features(len(sequence))
 
-    # MSA-based features (if available)
-    msa = load_msa(target_id)
-    msa_freqs, msa_entropy = msa_position_stats(msa)
-
-    # If MSA length differs (due to gaps at ends), we will truncate/pad to match sequence length.
-    def match_length(arr: np.ndarray, L: int) -> np.ndarray:
-        if arr.shape[0] == 0:
-            return np.zeros((L, arr.shape[1]), dtype=np.float32)
-        if arr.shape[0] == L:
-            return arr
-        if arr.shape[0] > L:
-            return arr[:L]
-        pad = np.zeros((L - arr.shape[0], arr.shape[1]), dtype=np.float32)
-        return np.concatenate([arr, pad], axis=0)
-
-    msa_freqs = match_length(msa_freqs, len(sequence))
-    msa_entropy = match_length(msa_entropy, len(sequence))
+    # MSA-based features (mapped to query residues using query aligned row when possible)
+    msa_records = load_msa_records(target_id)
+    msa_freqs, msa_entropy = msa_query_mapped_stats(msa_records, sequence)
 
     feature_blocks = [one_hot, pos, msa_freqs, msa_entropy]
 

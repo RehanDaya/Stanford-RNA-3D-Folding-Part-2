@@ -36,6 +36,7 @@ class BiLSTMCoordinateModel(nn.Module):
             dropout=cfg.dropout if cfg.num_layers > 1 else 0.0,
         )
         self.dropout = nn.Dropout(cfg.dropout)
+        self.out = nn.Linear(2 * cfg.hidden_dim, cfg.num_structures * 3)
         self.scale_head = nn.Sequential(
             nn.Linear(2 * cfg.hidden_dim, cfg.hidden_dim),
             nn.ReLU(),
