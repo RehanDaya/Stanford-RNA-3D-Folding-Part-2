@@ -11,30 +11,38 @@ DATA_DIR = ROOT / "data"
 Split = Literal["train", "validation", "test"]
 
 
+def _require_parquet(path: Path, csv_source: Path) -> None:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing required parquet file: {path}"
+        )
+
+
 def load_sequences(split: Split) -> pd.DataFrame:
     """
-    Load {split}_sequences.csv into a DataFrame.
+    Load {split}_sequences.parquet into a DataFrame (parquet-only).
     """
-    fname = f"{split}_sequences.csv"
-    path = DATA_DIR / fname
-    return pd.read_csv(path, low_memory=False)
+    parquet_path = DATA_DIR / f"{split}_sequences.parquet"
+    _require_parquet(parquet_path, DATA_DIR / f"{split}_sequences.csv")
+    return pd.read_parquet(parquet_path)
 
 
 def load_labels(split: Literal["train", "validation"]) -> pd.DataFrame:
     """
-    Load {split}_labels.csv into a DataFrame.
+    Load {split}_labels.parquet into a DataFrame (parquet-only).
     """
-    fname = f"{split}_labels.csv"
-    path = DATA_DIR / fname
-    return pd.read_csv(path, low_memory=False)
+    parquet_path = DATA_DIR / f"{split}_labels.parquet"
+    _require_parquet(parquet_path, DATA_DIR / f"{split}_labels.csv")
+    return pd.read_parquet(parquet_path)
 
 
 def load_sample_submission() -> pd.DataFrame:
     """
-    Load sample_submission.csv into a DataFrame.
+    Load sample_submission.parquet into a DataFrame (parquet-only).
     """
-    path = DATA_DIR / "sample_submission.csv"
-    return pd.read_csv(path)
+    parquet_path = DATA_DIR / "sample_submission.parquet"
+    _require_parquet(parquet_path, DATA_DIR / "sample_submission.csv")
+    return pd.read_parquet(parquet_path)
 
 
 def parse_id_column(id_value: str) -> tuple[str, int]:
@@ -58,10 +66,11 @@ def add_target_and_resid(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_rna_metadata() -> pd.DataFrame:
     """
-    Load extra/rna_metadata.csv containing per-chain RNA metadata.
+    Load extra/rna_metadata.parquet containing per-chain RNA metadata (parquet-only).
     """
-    path = DATA_DIR / "extra" / "rna_metadata.csv"
-    return pd.read_csv(path)
+    parquet_path = DATA_DIR / "extra" / "rna_metadata.parquet"
+    _require_parquet(parquet_path, DATA_DIR / "extra" / "rna_metadata.csv")
+    return pd.read_parquet(parquet_path)
 
 
 def parse_stoichiometry(stoichiometry: str) -> set[str]:

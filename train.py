@@ -25,7 +25,7 @@ class RNATargetDataset(Dataset):
         assert split in {"train", "validation"}
         self.split = split
 
-        print(f"Loading {split}_labels.csv ...")
+        print(f"Loading {split}_labels.parquet ...")
         labels_df = load_labels(split)
         labels_df = add_target_and_resid(labels_df)
         self.seq_map = get_sequence_map(split)
